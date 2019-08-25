@@ -46,7 +46,8 @@ class PCAE(nn.Module):
                 attention_pool = torch.sum(torch.sum(feature_maps*attention_soft,dim=-1),dim=-1) #(B,6+1+16)
                 temp.append(attention_pool.unsqueeze(1))
             part_capsule_param = torch.cat(temp,dim=1) #(B,M,23)
-            x_m,d_m,c_z = self.relu(part_capsule_param[:,:,:6]),self.sigmoid(part_capsule_param[:,:,6]).view(*part_capsule_param.size()[:2],1),self.relu(part_capsule_param[:,:,7:])
+            noise_1 = torch.FloatTensor(*part_capsule_param.size()[:2]).uniform_(-2,2).to(device)
+            x_m,d_m,c_z = self.relu(part_capsule_param[:,:,:6]),self.sigmoid(part_capsule_param[:,:,6]+noise_1).view(*part_capsule_param.size()[:2],1),self.relu(part_capsule_param[:,:,7:])
 
             # pytorch doesn't  support batch transforms 
             temp=[]
@@ -111,13 +112,14 @@ class OCAE(nn.Module):
         
         def forward(self,inp,x_m,d_m,device):
             object_parts = self.set_transformer(inp) #(B,K,9+16+1)
-            ov_k,c_k,a_k = self.relu(object_parts[:,:,:9]).view(*object_parts.size()[:2],1,3,3),self.relu(object_parts[:,:,9:25]),self.sigmoid(object_parts[:,:,-1]).view(*object_parts.size()[:2],1,1,1)
-
+            noise_1 = torch.FloatTensor(*object_parts.size()[:2]).uniform_(-2,2).to(device)
+            ov_k,c_k,a_k = self.relu(object_parts[:,:,:9]).view(*object_parts.size()[:2],1,3,3),self.relu(object_parts[:,:,9:25]),self.sigmoid(object_parts[:,:,-1]+noise_1).view(*object_parts.size()[:2],1,1,1)
+            noise_2 = torch.FloatTensor(object_parts.shape[0],24).uniform_(-2,2).to(device)
             temp_a =[]
             temp_lambda = []
             for num,mlp in enumerate(self.mlps):
                 mlp_out = self.mlps[num](c_k[:,num,:])
-                temp_a.append(self.sigmoid(mlp_out[:,:24]).unsqueeze(1))
+                temp_a.append(self.sigmoid(mlp_out[:,:24]+noise_2).unsqueeze(1))
                 temp_lambda.append(self.relu(mlp_out[:,24:]).unsqueeze(1))
             a_kn = torch.cat(temp_a,1).unsqueeze(-1).unsqueeze(-1) #(B,K,M,1,1)
             lambda_kn = torch.cat(temp_lambda,1).unsqueeze(-1).unsqueeze(-1) #(B,K,M,1,1)
@@ -137,7 +139,7 @@ class OCAE(nn.Module):
 
             before_log = gauss_mix.sum(1).log() #(B,M)
             log_likelihood = (before_log*(d_m.view(before_log.shape[0],-1))).sum(-1).mean() #scalar
-            return log_likelihood, a_k,a_kn
+            return log_likelihood, a_k,a_kn,gaussian
 
 
 
