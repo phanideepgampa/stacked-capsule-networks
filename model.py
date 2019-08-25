@@ -36,7 +36,7 @@ class PCAE(nn.Module):
         self.to_tensor = tt.ToTensor()
         
 
-        def forward(self,x):
+        def forward(self,x,device):
             outputs = [ capsule(x) for capsule in self.capsules ]
             temp= []
             for part_capsule in outputs:
@@ -105,13 +105,13 @@ class OCAE(nn.Module):
         self.mlps = nn.ModuleList( [ nn.Sequential( nn.Linear(special_feat,special_feat),
                                                      nn.ReLU(),
                                                      nn.Linear(special_feat,48)) for _ in range(num_capsules) ] )
-        self.op_mat = nn.ModuleList([ nn.ModuleList([ Parameter(torch.randn(3,3)) for _ in range(num_capsules) ]) for _ in range(num_capsules) ]  )
+        self.op_mat = Parameter(torch.randn(num_capsules,num_capsules,3,3))
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
         
-        def forward(self,inp,x_m,d_m):
+        def forward(self,inp,x_m,d_m,device):
             object_parts = self.set_transformer(inp) #(B,K,9+16+1)
-            ov_k,c_k,a_k = self.relu(object_parts[:,:,:9]).view(*object_parts.size()[:2],3,3),self.relu(object_parts[:,:,9:25]),self.sigmoid(object_parts[:,:,-1]).view(*object_parts.size()[:2],1)
+            ov_k,c_k,a_k = self.relu(object_parts[:,:,:9]).view(*object_parts.size()[:2],1,3,3),self.relu(object_parts[:,:,9:25]),self.sigmoid(object_parts[:,:,-1]).view(*object_parts.size()[:2],1,1,1)
 
             temp_a =[]
             temp_lambda = []
@@ -119,10 +119,25 @@ class OCAE(nn.Module):
                 mlp_out = self.mlps[num](c_k[:,num,:])
                 temp_a.append(self.sigmoid(mlp_out[:,:24]).unsqueeze(1))
                 temp_lambda.append(self.relu(mlp_out[:,24:]).unsqueeze(1))
-            a_kn = torch.cat(temp_a,1) #(B,K,M)
-            lambda_kn = torch.cat(temp_lambda,1) #(B,K,M)
+            a_kn = torch.cat(temp_a,1).unsqueeze(-1).unsqueeze(-1) #(B,K,M,1,1)
+            lambda_kn = torch.cat(temp_lambda,1).unsqueeze(-1).unsqueeze(-1) #(B,K,M,1,1)
+            v_kn = ov_k.matmul(self.op_mat) #(B,K,M,3,3)
+            mu_kn = v_kn.view(*v_kn.size()[:3],-1)[:6] #(B,K,M,6)
+            x_m = x_m.unsqueeze(1) #(B,1,M,6)
+            diff = (x_m - mu_kn).unsqueeze(-2) #(B,K,M,1,6)
+            identity = torch.eye(6).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(*diff.size()[:3],-1,-1).to(device) #(B,K,M,6,6)
+            cov_matrix = lambda_kn*identity #(B,K,M,6,6)
+            mahalanobis = torch.matmmul(torch.matmul(diff,cov_matrix.reciprocal()),diff.transpose(-1,-2)) #(B,K,M,1,1)
+            gaussian_multiplier = (((2*math.pi)**6)*(lambda_kn**6)).sqrt() #(B,K,M,1,1)
+            gaussian = (-0.5*mahalanobis).exp()*gaussian_multiplier.reciprocal() #(B,K,M,1,1)
 
-            return
+            gaussian_component = (a_k*a_kn)*((a_k.sum(1).unsqueeze(1)*a_kn.sum(2).unsqueeze(1)).reciprocal()) #(B,K,M,1,1)
+
+            gauss_mix = (gaussian*gaussian_component).squeeze(-1).squeeze(-1) #(B,K,M)
+
+            before_log = gauss_mix.sum(1).log() #(B,M)
+            log_likelihood = (before_log*(d_m.view(before_log.shape[0],-1))).sum(-1).mean() #scalar
+            return log_likelihood, a_k,a_kn
 
 
 
