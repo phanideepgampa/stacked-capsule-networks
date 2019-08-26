@@ -63,7 +63,7 @@ class PCAE(nn.Module):
                                                         pose[pos][3]+self.epsilon, # for accounting zero scale values
                                                         (pose[pos][4],pose[pos][5])),x.size()[2:])))
             temp.append(torch.cat(temp2,0).unsqueeze(0)) #(1,M,28,28)
-        transformed_templates = torch.cat(temp,0) #(B,M,28,28)
+        transformed_templates = torch.cat(temp,0).to(device) #(B,M,28,28)
         mix_prob = self.soft_max(d_m*transformed_templates.view(*transformed_templates.size()[:2],-1)).view_as(transformed_templates)
         std= x.view(*x.size()[:2],-1).std(-1).unsqueeze(1)  #(B,1,1)
         std = std*1 + self.epsilon
@@ -77,7 +77,7 @@ class PCAE(nn.Module):
         template_det = []
         for template in self.templates:
             template_det.append(template.data.view(1,-1))
-        template_detached = torch.cat(template_det,0).unsqueeze(0).expand(x_m_detach.shape[0],-1,-1) #(B,M,11*11)
+        template_detached = torch.cat(template_det,0).unsqueeze(0).expand(x_m_detach.shape[0],-1,-1).to(device) #(B,M,11*11)
         input_ocae = torch.cat([d_m_detach,x_m_detach,template_detached,c_z],-1) #(B,M,144)
         
         return log_likelihood,input_ocae,x_m_detach,d_m_detach

@@ -116,7 +116,7 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--mode', type=str, default='test')
+    parser.add_argument('--mode', type=str, default='train')
     parser.add_argument('--model_file', type=str, default='model/scae.model')
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=600)
