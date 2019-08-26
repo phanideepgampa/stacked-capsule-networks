@@ -8,6 +8,7 @@ import time
 import traceback
 
 import torch
+import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -61,7 +62,10 @@ def evaluate(model,train,test,K,device):
 
 def train(args,train,test,device):
 
-    scae = model.SCAE().to(device)
+    scae = model.SCAE()
+    if torch.cuda.device_count() > 1:
+        scae = nn.DataParallel(scae)
+    scae.to(device)
     total_loss = model.SCAE_LOSS()
     model_name = "model/scae.model"
     log_name = "log/SCAE"
