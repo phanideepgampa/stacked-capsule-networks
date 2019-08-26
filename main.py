@@ -32,28 +32,29 @@ def seed_everything(seed=1234):
 def evaluate(model,train,test,K,device):
     model.eval()
     prev_max = -1e+6*torch.ones(K).to(device)
-    prev_labels = -1*torch.ones(K).to(device)
-    for batch_idx, (x, target) in tqdm(enumerate(train)):
+    prev_labels = -1*torch.LongTensor(K).fill_(1).to(device)
+    for batch_idx, (x, target) in tqdm(enumerate(train),desc="train"):
         x = Variable(x).to(device)
         target = Variable(target).to(device)
         out = model(x,device,mode='test')
-        a_k = out[2] #(B,K)
-        max_act,max_ex = a_k.max(0).values,a_k.max(0).indices  #(K)
-        if (max_act>prev_max)!=0:
+        a_k = out[2].squeeze(-1) #(B,K)
+        max_act,max_ex = a_k.max(0).values.view(-1),a_k.max(0).indices.view(-1)  #(K)
+        if (max_act>prev_max).sum()!=0:
             prev_labels[max_act>prev_max]= target[max_ex]
             prev_max[max_act>prev_max]= max_act[max_act>prev_max]
+        break
     
     count = 0 
     total_count = 0
-    for batch_idx, (x, target) in enumerate(test):
+    for batch_idx, (x, target) in tqdm(enumerate(test),desc='test'):
         x = Variable(x).to(device)
         target = Variable(target).to(device)
         out = model(x,device,mode='test')
-        a_k = out[2] #(B,K)
-        max_act,max_ex = a_k.max(-1).values,a_k.max(-1).indices
+        a_k = out[2].squeeze(-1) #(B,K)
+        max_act,max_ex = a_k.max(-1).values.view(-1),a_k.max(-1).indices.view(-1)
         pred = prev_labels[max_ex]
         count+=(pred == target.data).sum()
-        total_cnt += x.data.size()[0]
+        total_count += x.data.size()[0]
     accuracy = count/total_count
     return accuracy
 
@@ -98,7 +99,7 @@ def train(args,train,test,device):
             if (batch_idx+1) % 50 == 0 or (batch_idx+1) == len(train):
                 logging.info('==>>> epoch: {}, batch index: {}, train loss: {:.6f}'.format(
                     epoch, batch_idx+1, ave_loss))
-            if (epoch+1)%2 == 0:
+            if (epoch+1)%50 == 0:
                 scae.eval()
                 accuracy = evaluate(scae,train=train,test=test,K=K,device=device)
                 if accuracy>prev_best_accuracy:
@@ -115,7 +116,8 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--mode', type=str, default='train')
+    parser.add_argument('--mode', type=str, default='test')
+    parser.add_argument('--model_file', type=str, default='model/scae.model')
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=600)
     parser.add_argument('--lr', type=float, default=1e-5)
@@ -141,8 +143,16 @@ def main():
                     dataset=test_set,
                     batch_size=args.batch_size,
                     shuffle=False)
+    if args.mode == 'train':
+        train(args,train=train_loader,test=test_loader,device=device)
+    else:
+        model_name = args.model_file
+        print("loading existing model:->%s" % model_name)
+        scae = torch.load(model_name, map_location=lambda storage, loc: storage)
+        scae.to(device) 
+        accuracy = evaluate(scae,train=train_loader,test=test_loader,K=args.K,device=device)
+        print("accuracy: %0.4f"%accuracy)
 
-    train(args,train=train_loader,test=test_loader,device=device)
 
 if __name__=="__main__":
     main()
