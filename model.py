@@ -16,8 +16,9 @@ from setmodules import *
 class PCAE(nn.Module):
     def __init__(self,config, num_capsules=24, template_size=11, num_templates=24,num_feature_maps=24):
         super(PCAE,self).__init__()
-        
-        self.capsules = nn.ModuleList([nn.Sequential(nn.Conv2d(1,128,3,stride=2),
+        self.num_capsules = num_capsules
+        self.num_feature_maps = num_feature_maps       
+        self.capsules = nn.Sequential(nn.Conv2d(1,128,3,stride=2),
                             nn.ReLU(),
                         nn.Conv2d(128,128,3,stride=2),
                             nn.ReLU(),
@@ -25,8 +26,8 @@ class PCAE(nn.Module):
                             nn.ReLU(),
                         nn.Conv2d(128,128,3,stride=1),
                             nn.ReLU(),
-                        nn.Conv2d(128,num_feature_maps,1,stride=1)
-                            ) for _ in range(num_capsules)])
+                        nn.Conv2d(128,num_capsules*num_feature_maps,1,stride=1))
+
         self.templates = [ nn.Parameter(torch.randn(1,template_size,template_size))
                             for _ in range(num_templates)]
         self.soft_max = nn.Softmax(2)
@@ -37,15 +38,13 @@ class PCAE(nn.Module):
         self.epsilon = torch.tensor(1e-6)
         
     def forward(self,x,device,mode='train'):
-        outputs = [ capsule(x) for capsule in self.capsules ]
-        temp= []
-        for part_capsule in outputs:
-            attention = part_capsule[:,-1,:,:].unsqueeze(1)
-            attention_soft = self.soft_max(attention.view(*attention.size()[:2],-1)).view_as(attention)
-            feature_maps = part_capsule[:,:-1,:,:]
-            attention_pool = torch.sum(torch.sum(feature_maps*attention_soft,dim=-1),dim=-1) #(B,6+1+16)
-            temp.append(attention_pool.unsqueeze(1))
-        part_capsule_param = torch.cat(temp,dim=1) #(B,M,23)
+        outputs = self.capsules(x)
+        outputs = outputs.view(-1,self.num_capsules,self.num_feature_maps,*outputs.size()[2:]) #(B,M,24,2,2)
+        attention = outputs[:,:,-1,:,:].unsqueeze(2)
+        attention_soft = self.soft_max(attention.view(*attention.size()[:3],-1)).view_as(attention)
+        feature_maps = outputs[:,:,:-1,:,:]
+        part_capsule_param = torch.sum(torch.sum(feature_maps*attention_soft,dim=-1),dim=-1) #(B,M,23)
+
         if mode == 'train':
             noise_1 = torch.FloatTensor(*part_capsule_param.size()[:2]).uniform_(-2,2).to(device)
         else:
