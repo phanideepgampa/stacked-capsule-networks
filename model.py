@@ -34,6 +34,7 @@ class PCAE(nn.Module):
         self.sigmoid = nn.Sigmoid()
         self.to_pil = tt.ToPILImage()
         self.to_tensor = tt.ToTensor()
+        self.epsilon = torch.tensor(1e-6)
         
     def forward(self,x,device,mode='train'):
         outputs = [ capsule(x) for capsule in self.capsules ]
@@ -51,7 +52,6 @@ class PCAE(nn.Module):
             noise_1 = torch.zeros(*part_capsule_param.size()[:2]).to(device)
         x_m,d_m,c_z = self.relu(part_capsule_param[:,:,:6]),self.sigmoid(part_capsule_param[:,:,6]+noise_1).view(*part_capsule_param.size()[:2],1),self.relu(part_capsule_param[:,:,7:])
 
-        epsilon = torch.tensor(1e-6).to(device)
         # pytorch doesn't  support batch transforms 
         temp=[]
         for pose in x_m:
@@ -60,12 +60,13 @@ class PCAE(nn.Module):
                 temp2.append(self.to_tensor(F1.resize(F1.affine(self.to_pil(template),
                                                         pose[pos][0],
                                                         (pose[pos][1],pose[pos][2]),
-                                                        pose[pos][3]+epsilon, # for accounting zero scale values
+                                                        pose[pos][3]+self.epsilon, # for accounting zero scale values
                                                         (pose[pos][4],pose[pos][5])),x.size()[2:])))
             temp.append(torch.cat(temp2,0).unsqueeze(0)) #(1,M,28,28)
         transformed_templates = torch.cat(temp,0) #(B,M,28,28)
         mix_prob = self.soft_max(d_m*transformed_templates.view(*transformed_templates.size()[:2],-1)).view_as(transformed_templates)
         std= x.view(*x.size()[:2],-1).std(-1).unsqueeze(1)  #(B,1,1)
+        std = std*1 + self.epsilon
         multiplier = (std*math.pi*2).sqrt().reciprocal().unsqueeze(-1)  #(B,1,1,1)
         power_multiply = (-(2*(std**2))).reciprocal().unsqueeze(-1) #(B,1,1,1)
         detach_x = x.data
@@ -112,6 +113,7 @@ class OCAE(nn.Module):
         self.op_mat = Parameter(torch.randn(num_capsules,num_capsules,3,3))
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
+        self.epsilon = torch.tensor(1e-6)
     
     def forward(self,inp,x_m,d_m,device,mode='train'):
         object_parts = self.set_transformer(inp) #(B,K,9+16+1)
@@ -132,13 +134,14 @@ class OCAE(nn.Module):
             temp_lambda.append(self.relu(mlp_out[:,24:]).unsqueeze(1))
         a_kn = torch.cat(temp_a,1).unsqueeze(-1).unsqueeze(-1) #(B,K,M,1,1)
         lambda_kn = torch.cat(temp_lambda,1).unsqueeze(-1).unsqueeze(-1) #(B,K,M,1,1)
+        lambda_kn = lambda_kn*1+self.epsilon #for supressing nan values when taking reciprocal
         v_kn = ov_k.matmul(self.op_mat) #(B,K,M,3,3)
         mu_kn = v_kn.view(*v_kn.size()[:3],-1)[:,:,:,:6] #(B,K,M,6)
         x_m = x_m.unsqueeze(1) #(B,1,M,6)
         diff = (x_m - mu_kn).unsqueeze(-2) #(B,K,M,1,6)
         identity = torch.eye(6).unsqueeze(0).unsqueeze(0).unsqueeze(0).expand(*diff.size()[:3],-1,-1).to(device) #(B,K,M,6,6)
-        cov_matrix = lambda_kn*identity #(B,K,M,6,6)
-        mahalanobis = torch.matmul(torch.matmul(diff,cov_matrix.reciprocal()),diff.transpose(-1,-2)) #(B,K,M,1,1)
+        cov_matrix_inv = (lambda_kn.reciprocal())*identity #(B,K,M,6,6)
+        mahalanobis = torch.matmul(torch.matmul(diff,cov_matrix_inv),diff.transpose(-1,-2)) #(B,K,M,1,1)
         gaussian_multiplier = (((2*math.pi)**6)*(lambda_kn**6)).sqrt() #(B,K,M,1,1)
         gaussian = (-0.5*mahalanobis).exp()*gaussian_multiplier.reciprocal() #(B,K,M,1,1)
 
@@ -148,7 +151,7 @@ class OCAE(nn.Module):
 
         before_log = gauss_mix.sum(1).log() #(B,M)
         log_likelihood = (before_log*(d_m.view(before_log.shape[0],-1))).sum(-1).mean() #scalar
-        return log_likelihood, a_k,a_kn,gaussian
+        return log_likelihood, a_k.squeeze(-1).squeeze(-1),a_kn.squeeze(-1).squeeze(-1),gaussian.squeeze(-1).squeeze(-1)
 
 class SCAE(nn.Module):
     def __init__(self,config=None):
@@ -160,6 +163,24 @@ class SCAE(nn.Module):
         part_likelihood,a_k,a_kn,gaussian = self.ocae(input_ocae,x_m,d_m,device,mode)
         return image_likelihood,part_likelihood,a_k,a_kn,gaussian
 
+class SCAE_LOSS(nn.Module):
+    def __init__(self):
+        super(SCAE_LOSS,self).__init__()
+    def entropy(self,x):
+        h = F.softmax(x, dim=-1) * F.log_softmax(x, dim=-1)
+        h = -1.0 * h.sum(-1)
+        return h.mean()
+    def forward(self,output_scae,b_c,k_c):
+        img_lik,part_lik,a_k,a_kn,gaussian = output_scae
+        a_k_prior = (a_k.squeeze(-1))*(a_kn.max(-1).values) #(B,K)
+        a_kn_posterior = a_k *(a_kn*gaussian) #(B,K,M)
+        l_11 = (a_k_prior.sum(-1)-k_c).pow(2).mean() 
+        l_12 = (a_k_prior.sum(0)-b_c).pow(2).mean()
+        prior_sparsity = l_11+l_12
+        v_k = a_kn_posterior.sum(-1).transpose(0,1)
+        v_b = a_kn_posterior.sum(-1)
+        posterior_sparsity = self.entropy(v_k)-self.entropy(v_b)
+        return -img_lik-part_lik+prior_sparsity+(10*posterior_sparsity)
         
 
 
