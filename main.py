@@ -32,30 +32,32 @@ def seed_everything(seed=1234):
 
 def evaluate(model,train,test,K,device):
     model.eval()
-    prev_max = -1e+6*torch.ones(K).to(device)
-    prev_labels = -1*torch.LongTensor(K).fill_(1).to(device)
-    for batch_idx, (x, target) in tqdm(enumerate(train),desc="train"):
-        x = Variable(x).to(device)
-        target = Variable(target).to(device)
-        out = model(x,device,mode='test')
-        a_k = out[2].squeeze(-1) #(B,K)
-        max_act,max_ex = a_k.max(0).values.view(-1),a_k.max(0).indices.view(-1)  #(K)
-        if (max_act>prev_max).sum()!=0:
-            prev_labels[max_act>prev_max]= target[max_ex]
-            prev_max[max_act>prev_max]= max_act[max_act>prev_max]
+    with torch.no_grad():
+        prev_max = -1e+6*torch.ones(K).to(device)
+        prev_labels = -1*torch.LongTensor(K).fill_(1).to(device)
+        for batch_idx, (x, target) in tqdm(enumerate(train),desc="train"):
+            x = Variable(x).to(device)
+            target = Variable(target).to(device)
+            out = model(x,device,mode='test')
+            a_k = out[2].squeeze(-1) #(B,K)
+            max_act,max_ex = a_k.max(0).values.view(-1),a_k.max(0).indices.view(-1)  #(K)
+            if (max_act>prev_max).sum()!=0:
+                prev_labels[max_act>prev_max]= target[max_ex]
+                prev_max[max_act>prev_max]= max_act[max_act>prev_max]
         
     
     count = 0 
     total_count = 0
-    for batch_idx, (x, target) in tqdm(enumerate(test),desc='test'):
-        x = Variable(x).to(device)
-        target = Variable(target).to(device)
-        out = model(x,device,mode='test')
-        a_k = out[2].squeeze(-1) #(B,K)
-        max_act,max_ex = a_k.max(-1).values.view(-1),a_k.max(-1).indices.view(-1)
-        pred = prev_labels[max_ex]
-        count+=(pred == target.data).sum()
-        total_count += x.data.size()[0]
+    with torch.no_grad():
+        for batch_idx, (x, target) in tqdm(enumerate(test),desc='test'):
+            x = Variable(x).to(device)
+            target = Variable(target).to(device)
+            out = model(x,device,mode='test')
+            a_k = out[2].squeeze(-1) #(B,K)
+            max_act,max_ex = a_k.max(-1).values.view(-1),a_k.max(-1).indices.view(-1)
+            pred = prev_labels[max_ex]
+            count+=(pred == target.data).sum()
+            total_count += x.data.size()[0]
     accuracy = count/total_count
     return accuracy
 
@@ -97,8 +99,8 @@ def train(args,train,test,device):
 
             loss = total_loss(out,b_c=b_c,k_c=k_c)
             
-            ave_loss = ave_loss * 0.9 + loss.data * 0.1
-            loss.backward()
+            ave_loss = ave_loss * 0.9 + loss.mean().data * 0.1
+            loss.mean().backward()
             #torch.nn.utils.clip_grad_norm_(scae.parameters(),5)
             #print(loss)
             optimizer.step()
