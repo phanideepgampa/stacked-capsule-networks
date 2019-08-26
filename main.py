@@ -42,7 +42,7 @@ def evaluate(model,train,test,K,device):
         if (max_act>prev_max).sum()!=0:
             prev_labels[max_act>prev_max]= target[max_ex]
             prev_max[max_act>prev_max]= max_act[max_act>prev_max]
-        break
+        
     
     count = 0 
     total_count = 0
