@@ -70,7 +70,8 @@ class PCAE(nn.Module):
         power_multiply = (-(2*(std**2))).reciprocal().unsqueeze(-1) #(B,1,1,1)
         detach_x = x.data
         gaussians = multiplier*((((detach_x-transformed_templates)**2)*power_multiply).exp()) #(B,M,28,28)
-        log_likelihood = torch.sum(gaussians*mix_prob,dim=1).log().sum(-1).sum(-1).mean() #scalar loss
+        pre_ll = (gaussians*mix_prob*1.0)+self.epsilon
+        log_likelihood = torch.sum(pre_ll,dim=1).log().sum(-1).sum(-1).mean() #scalar loss
         x_m_detach = x_m.data
         d_m_detach = d_m.data
         template_det = []
@@ -147,7 +148,7 @@ class OCAE(nn.Module):
         gaussian_component = (a_k*a_kn)*((a_k.sum(1).unsqueeze(1)*a_kn.sum(2).unsqueeze(1)).reciprocal()) #(B,K,M,1,1)
 
         gauss_mix = (gaussian*gaussian_component).squeeze(-1).squeeze(-1) #(B,K,M)
-
+        gauss_mix = (gauss_mix*1.0)+self.epsilon
         before_log = gauss_mix.sum(1).log() #(B,M)
         log_likelihood = (before_log*(d_m.view(before_log.shape[0],-1))).sum(-1).mean() #scalar
         return log_likelihood, a_k.squeeze(-1).squeeze(-1),a_kn.squeeze(-1).squeeze(-1),gaussian.squeeze(-1).squeeze(-1)
