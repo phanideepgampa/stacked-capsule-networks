@@ -64,11 +64,11 @@ class PCAE(nn.Module):
             temp.append(torch.cat(temp2,0).unsqueeze(0)) #(1,M,28,28)
         transformed_templates = torch.cat(temp,0).to(device) #(B,M,28,28)
         mix_prob = self.soft_max(d_m*transformed_templates.view(*transformed_templates.size()[:2],-1)).view_as(transformed_templates)
-        std= x.view(*x.size()[:2],-1).std(-1).unsqueeze(1)  #(B,1,1)
+        detach_x = x.data
+        std= detach_x.view(*x.size()[:2],-1).std(-1).unsqueeze(1)  #(B,1,1)
         std = std*1 + self.epsilon
         multiplier = (std*math.pi*2).sqrt().reciprocal().unsqueeze(-1)  #(B,1,1,1)
         power_multiply = (-(2*(std**2))).reciprocal().unsqueeze(-1) #(B,1,1,1)
-        detach_x = x.data
         gaussians = multiplier*((((detach_x-transformed_templates)**2)*power_multiply).exp()) #(B,M,28,28)
         pre_ll = (gaussians*mix_prob*1.0)+self.epsilon
         log_likelihood = torch.sum(pre_ll,dim=1).log().sum(-1).sum(-1).mean() #scalar loss
