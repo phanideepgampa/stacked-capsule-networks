@@ -107,15 +107,16 @@ def train(args,train,test,device):
             if (batch_idx+1) % 50 == 0 or (batch_idx+1) == len(train):
                 logging.info('==>>> epoch: {}, batch index: {}, train loss: {:.6f}'.format(
                     epoch, batch_idx+1, ave_loss))
-            if (epoch+1)%50 == 0:
-                scae.eval()
-                accuracy = evaluate(scae,train=train,test=test,K=K,device=device)
-                if accuracy>prev_best_accuracy:
-                    prev_best_accuracy = accuracy
-                    torch.save(scae, model_name)
-                    logging.debug("saving model"+str(model_name)+" "+"with test_accuracy:"+ str(accuracy))
-                logging.debug('epoch ' + str(epoch) + 'test-accuracy: '
-                            + str(accuracy))
+
+        if (epoch+1)%50 == 0:
+            scae.eval()
+            accuracy = evaluate(scae,train=train,test=test,K=K,device=device)
+            if accuracy>prev_best_accuracy:
+                prev_best_accuracy = accuracy
+                torch.save(scae, model_name)
+                logging.debug("saving model"+str(model_name)+" "+"with test_accuracy:"+ str(accuracy))
+            logging.debug('epoch ' + str(epoch) + 'test-accuracy: '
+                        + str(accuracy))
     return
 
 
