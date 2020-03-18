@@ -59,7 +59,7 @@ class PCAE(nn.Module):
                                                    torch.Size((B, 1, target_size, target_size)) # size
                                                ))
                                  for i in range(self.num_capsules)]
-        transformed_templates = torch.cat(transformed_templates, 1).to(device)
+        transformed_templates = torch.cat(transformed_templates, 1)
         mix_prob = self.soft_max(d_m*transformed_templates.view(*transformed_templates.size()[:2],-1)).view_as(transformed_templates)
         detach_x = x.data
         std= detach_x.view(*x.size()[:2],-1).std(-1).unsqueeze(1)  #(B,1,1)
