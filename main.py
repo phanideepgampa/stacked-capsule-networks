@@ -22,6 +22,7 @@ import model
 
 np.set_printoptions(precision=4, suppress=True)
 
+
 def seed_everything(seed=1234):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -29,6 +30,7 @@ def seed_everything(seed=1234):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
+
 
 def evaluate(model,train,test,K,device):
     model.eval()
@@ -44,8 +46,7 @@ def evaluate(model,train,test,K,device):
             if (max_act>prev_max).sum()!=0:
                 prev_labels[max_act>prev_max]= target[max_ex]
                 prev_max[max_act>prev_max]= max_act[max_act>prev_max]
-        
-    
+
     count = 0 
     total_count = 0
     with torch.no_grad():
@@ -107,15 +108,16 @@ def train(args,train,test,device):
             if (batch_idx+1) % 50 == 0 or (batch_idx+1) == len(train):
                 logging.info('==>>> epoch: {}, batch index: {}, train loss: {:.6f}'.format(
                     epoch, batch_idx+1, ave_loss))
-            if (epoch+1)%50 == 0:
-                scae.eval()
-                accuracy = evaluate(scae,train=train,test=test,K=K,device=device)
-                if accuracy>prev_best_accuracy:
-                    prev_best_accuracy = accuracy
-                    torch.save(scae, model_name)
-                    logging.debug("saving model"+str(model_name)+" "+"with test_accuracy:"+ str(accuracy))
-                logging.debug('epoch ' + str(epoch) + 'test-accuracy: '
-                            + str(accuracy))
+
+        if (epoch+1)%50 == 0:
+            scae.eval()
+            accuracy = evaluate(scae,train=train,test=test,K=K,device=device)
+            if accuracy>prev_best_accuracy:
+                prev_best_accuracy = accuracy
+                torch.save(scae, model_name)
+                logging.debug("saving model"+str(model_name)+" "+"with test_accuracy:"+ str(accuracy))
+            logging.debug('epoch ' + str(epoch) + 'test-accuracy: '
+                        + str(accuracy))
     return
 
 
@@ -151,6 +153,7 @@ def main():
                     dataset=test_set,
                     batch_size=args.batch_size,
                     shuffle=False)
+
     if args.mode == 'train':
         train(args,train=train_loader,test=test_loader,device=device)
     else:
@@ -162,5 +165,5 @@ def main():
         print("accuracy: %0.4f"%accuracy)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

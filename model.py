@@ -51,18 +51,15 @@ class PCAE(nn.Module):
             noise_1 = torch.zeros(*part_capsule_param.size()[:2]).to(device)
         x_m,d_m,c_z = self.relu(part_capsule_param[:,:,:6]),self.sigmoid(part_capsule_param[:,:,6]+noise_1).view(*part_capsule_param.size()[:2],1),self.relu(part_capsule_param[:,:,7:])
 
-        # pytorch doesn't  support batch transforms 
-        temp=[]
-        for pose in x_m:
-            temp2=[]
-            for pos,template in enumerate(self.templates):
-                temp2.append(self.to_tensor(F1.resize(F1.affine(self.to_pil(template),
-                                                        pose[pos][0],
-                                                        (pose[pos][1],pose[pos][2]),
-                                                        pose[pos][3]+self.epsilon, # for accounting zero scale values
-                                                        (pose[pos][4],pose[pos][5])),x.size()[2:])))
-            temp.append(torch.cat(temp2,0).unsqueeze(0)) #(1,M,28,28)
-        transformed_templates = torch.cat(temp,0).to(device) #(B,M,28,28)
+        # Affine Transform
+        B, _, _, target_size = x.size()
+        transformed_templates = [F.grid_sample(self.templates[i].repeat(B,1,1,1).to(device), # sce.to(device) could not transfrom self.templates to "cuda"
+                                               F.affine_grid(
+                                                   self.geometric_transform(x_m[:,i,:]),  # pose
+                                                   torch.Size((B, 1, target_size, target_size)) # size
+                                               ))
+                                 for i in range(self.num_capsules)]
+        transformed_templates = torch.cat(transformed_templates, 1)
         mix_prob = self.soft_max(d_m*transformed_templates.view(*transformed_templates.size()[:2],-1)).view_as(transformed_templates)
         detach_x = x.data
         std= detach_x.view(*x.size()[:2],-1).std(-1).unsqueeze(1)  #(B,1,1)
@@ -82,6 +79,50 @@ class PCAE(nn.Module):
         
         return log_likelihood,input_ocae,x_m_detach,d_m_detach
 
+    @staticmethod
+    def geometric_transform(pose_tensor, similarity=False, nonlinear=True):
+        """Convers paramer tensor into an affine or similarity transform.
+        This function is adapted from:
+        https://github.com/akosiorek/stacked_capsule_autoencoders/blob/master/capsules/math_ops.py
+
+        Args:
+        pose_tensor: [..., 6] tensor.
+        similarity: bool.
+        nonlinear: bool; applies nonlinearities to pose params if True.
+
+        Returns:
+        [..., 2, 3] tensor.
+        """
+
+        scale_x, scale_y, theta, shear, trans_x, trans_y = torch.split(pose_tensor, 1, -1)
+
+        if nonlinear:
+            scale_x, scale_y = torch.sigmoid(scale_x) + 1e-2, torch.sigmoid(scale_y) + 1e-2
+            trans_x, trans_y, shear = torch.tanh(trans_x * 5.),  torch.tanh(trans_y * 5.), torch.tanh(shear * 5.)
+            theta *= 2. * math.pi
+        else:
+            scale_x, scale_y = (abs(i) + 1e-2 for i in (scale_x, scale_y))
+
+        c, s = torch.cos(theta), torch.sin(theta)
+
+        if similarity:
+            scale = scale_x
+            pose = [scale * c, -scale * s, trans_x, scale * s, scale * c, trans_y]
+
+        else:
+            pose = [
+                scale_x * c + shear * scale_y * s, -scale_x * s + shear * scale_y * c,
+                trans_x, scale_y * s, scale_y * c, trans_y
+            ]
+
+        pose = torch.cat(pose, -1)
+
+        # convert to a matrix
+        shape = list(pose.shape[:-1])
+        shape += [2, 3]
+        pose = torch.reshape(pose, shape)
+
+        return pose
 
 class SetTransformer(nn.Module):
     def __init__(self, dim_input, num_outputs, dim_output,
