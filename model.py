@@ -30,7 +30,7 @@ class PCAE(nn.Module):
 
         self.templates = [ nn.Parameter(torch.randn(1,template_size,template_size))
                             for _ in range(num_templates)]
-        self.soft_max = nn.Softmax(2)
+        self.soft_max = nn.Softmax(1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
         self.to_pil = tt.ToPILImage()
