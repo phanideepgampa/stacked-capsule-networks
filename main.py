@@ -44,8 +44,11 @@ def evaluate(model,train,test,K,device):
             a_k = out[2].squeeze(-1) #(B,K)
             max_act,max_ex = a_k.max(0).values.view(-1),a_k.max(0).indices.view(-1)  #(K)
             if (max_act>prev_max).sum()!=0:
-                prev_labels[max_act>prev_max]= target[max_ex]
-                prev_max[max_act>prev_max]= max_act[max_act>prev_max]
+                for i in range(0,K):
+                    if max_act[i]>prev_max[i]:
+                        prev_labels[i]=target[max_ex[i]]
+                        prev_max[i]=max_act[i]
+
 
     count = 0 
     total_count = 0
