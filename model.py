@@ -28,8 +28,8 @@ class PCAE(nn.Module):
                             nn.ReLU(),
                         nn.Conv2d(128,num_capsules*num_feature_maps,1,stride=1))
 
-        self.templates = [ nn.Parameter(torch.randn(1,template_size,template_size))
-                            for _ in range(num_templates)]
+        self.templates = nn.ModuleList([ nn.Parameter(torch.randn(1,template_size,template_size))
+                            for _ in range(num_templates)])
         self.soft_max = nn.Softmax(1)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
