@@ -105,7 +105,7 @@ def train(args,train,test,device):
             
             ave_loss = ave_loss * 0.9 + loss.mean().data * 0.1
             loss.mean().backward()
-            #torch.nn.utils.clip_grad_norm_(scae.parameters(),5)
+            torch.nn.utils.clip_grad_norm_(scae.parameters(),5)
             #print(loss)
             optimizer.step()
             if (batch_idx+1) % 50 == 0 or (batch_idx+1) == len(train):
