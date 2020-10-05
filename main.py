@@ -62,7 +62,7 @@ def evaluate(model,train,test,K,device):
             pred = prev_labels[max_ex]
             count+=(pred == target.data).sum()
             total_count += x.data.size()[0]
-    accuracy = count/total_count
+    accuracy = count.item()/total_count
     return accuracy
 
 
