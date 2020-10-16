@@ -64,7 +64,8 @@ class PCAE(nn.Module):
         detach_x = x.data
         std= detach_x.view(*x.size()[:2],-1).std(-1).unsqueeze(1)  #(B,1,1)
         std = std*1 + self.epsilon
-        multiplier = (std*math.pi*2).sqrt().reciprocal().unsqueeze(-1)  #(B,1,1,1)
+        #multiplier = (std*math.pi*2).sqrt().reciprocal().unsqueeze(-1)  #(B,1,1,1)
+        multiplier = (std * math.sqrt(math.pi * 2)).reciprocal().unsqueeze(-1)  #(B,1,1,1)
         power_multiply = (-(2*(std**2))).reciprocal().unsqueeze(-1) #(B,1,1,1)
         gaussians = multiplier*((((detach_x-transformed_templates)**2)*power_multiply).exp()) #(B,M,28,28)
         pre_ll = (gaussians*mix_prob*1.0)+self.epsilon
