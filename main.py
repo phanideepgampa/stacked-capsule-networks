@@ -11,7 +11,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.autograd import Variable
 import torchvision.datasets
 import torchvision.transforms
 import numpy as np
@@ -32,94 +31,84 @@ def seed_everything(seed=1234):
     torch.backends.cudnn.deterministic = True
 
 
-def evaluate(model,train,test,K,device):
+def evaluate(model,train,test,K,device,num_classes=10):
+    """Unsupervised classification accuracy: every object capsule is assigned the label that
+    occurs most often among the training examples for which it is the most active capsule;
+    a test example is then predicted with the label of its most active capsule."""
     model.eval()
+    votes = torch.zeros(K,num_classes,dtype=torch.long,device=device)
     with torch.no_grad():
-        prev_max = -1e+6*torch.ones(K).to(device)
-        prev_labels = -1*torch.LongTensor(K).fill_(1).to(device)
         for batch_idx, (x, target) in tqdm(enumerate(train),desc="train"):
-            x = Variable(x).to(device)
-            target = Variable(target).to(device)
-            out = model(x,device,mode='test')
-            a_k = out[2].squeeze(-1) #(B,K)
-            max_act,max_ex = a_k.max(0).values.view(-1),a_k.max(0).indices.view(-1)  #(K)
-            if (max_act>prev_max).sum()!=0:
-                for i in range(0,K):
-                    if max_act[i]>prev_max[i]:
-                        prev_labels[i]=target[max_ex[i]]
-                        prev_max[i]=max_act[i]
+            x, target = x.to(device), target.to(device)
+            caps_presence = model(x,mode='test')[2] #(B,K)
+            winner = caps_presence.argmax(-1)
+            votes.index_put_((winner,target),torch.ones_like(target),accumulate=True)
+    capsule_labels = votes.argmax(-1) #(K)
 
-
-    count = 0 
+    count = 0
     total_count = 0
     with torch.no_grad():
         for batch_idx, (x, target) in tqdm(enumerate(test),desc='test'):
-            x = Variable(x).to(device)
-            target = Variable(target).to(device)
-            out = model(x,device,mode='test')
-            a_k = out[2].squeeze(-1) #(B,K)
-            max_act,max_ex = a_k.max(-1).values.view(-1),a_k.max(-1).indices.view(-1)
-            pred = prev_labels[max_ex]
-            count+=(pred == target.data).sum()
-            total_count += x.data.size()[0]
-    accuracy = count.item()/total_count
-    return accuracy
+            x, target = x.to(device), target.to(device)
+            caps_presence = model(x,mode='test')[2] #(B,K)
+            pred = capsule_labels[caps_presence.argmax(-1)]
+            count += (pred == target).sum().item()
+            total_count += x.size(0)
+    model.train()
+    return count/total_count
 
 
 def train(args,train,test,device):
 
-    scae = model.SCAE()
-    if torch.cuda.device_count() > 1:
-        scae = nn.DataParallel(scae)
-    scae.to(device)
-    total_loss = model.SCAE_LOSS()
+    scae = model.SCAE(num_parts=args.M,num_objects=args.K)
     model_name = "model/scae.model"
     log_name = "log/SCAE"
     prev_best_accuracy = 0.
     K = args.K
-    C = args.C
-    B = args.batch_size
     if args.load_ext:
         model_name = args.model_file
         print("loading existing model:->%s" % model_name)
-        scae = torch.load(model_name, map_location=lambda storage, loc: storage)
-        scae.to(device)     
+        scae.load_state_dict(torch.load(model_name, map_location='cpu'))
         log_name = 'log/'+model_name.split('/')[-1]
-        prev_best_accuracy = evaluate(scae,train,test,K=K,device=device)
-       
+    scae.to(device)
+    if args.load_ext:
+        prev_best_accuracy = evaluate(scae,train,test,K=K,device=device,num_classes=args.C)
+    for d in [os.path.dirname(model_name), os.path.dirname(log_name)]:
+        if d:
+            os.makedirs(d, exist_ok=True)
+
     logging.basicConfig(filename='%s.log' % log_name,
                         level=logging.DEBUG, format='%(asctime)s %(levelname)-10s %(message)s')
 
-    optimizer = optim.RMSprop(scae.parameters(), lr=args.lr, momentum=0.9,eps=(1/(10*args.batch_size)**2) )
-    k_c = torch.tensor(float(K/C)).to(device)
-    b_c = torch.tensor(float(B/C)).to(device)
-    for epoch in range(args.epochs):    
+    # TF RMSProp adds epsilon inside the square root, PyTorch outside of it
+    eps = (1e-2/args.batch_size**2)**0.5
+    optimizer = optim.RMSprop(scae.parameters(), lr=args.lr, momentum=0.9, eps=eps)
+    total_loss = model.SCAE_LOSS(num_classes=args.C)
+    for epoch in range(args.epochs):
         ave_loss = 0
+        scae.train()
         for batch_idx, (x, target) in tqdm(enumerate(train)):
             optimizer.zero_grad()
-            scae.train()
-            x = Variable(x).to(device)
-            out = scae(x,device,mode='train')
+            x = x.to(device)
+            out = scae(x,mode='train')
 
-            loss = total_loss(out,b_c=b_c,k_c=k_c)
-            
-            ave_loss = ave_loss * 0.9 + loss.mean().data * 0.1
-            loss.mean().backward()
+            loss = total_loss(out)
+
+            ave_loss = ave_loss * 0.9 + loss.item() * 0.1
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(scae.parameters(),5)
-            #print(loss)
             optimizer.step()
             if (batch_idx+1) % 50 == 0 or (batch_idx+1) == len(train):
-                logging.info('==>>> epoch: {}, batch index: {}, train loss: {:.6f}'.format(
-                    epoch, batch_idx+1, ave_loss))
+                logging.info('==>>> epoch: {}, batch index: {}, train loss: {:.6f}, image ll: {:.2f}, part ll: {:.2f}'.format(
+                    epoch, batch_idx+1, ave_loss, out[0].item(), out[1].item()))
 
-        if (epoch+1)%50 == 0:
-            scae.eval()
-            accuracy = evaluate(scae,train=train,test=test,K=K,device=device)
+        if (epoch+1)%args.eval_every == 0:
+            accuracy = evaluate(scae,train=train,test=test,K=K,device=device,num_classes=args.C)
             if accuracy>prev_best_accuracy:
                 prev_best_accuracy = accuracy
-                torch.save(scae, model_name)
+                torch.save(scae.state_dict(), model_name)
                 logging.debug("saving model"+str(model_name)+" "+"with test_accuracy:"+ str(accuracy))
-            logging.debug('epoch ' + str(epoch) + 'test-accuracy: '
+            logging.debug('epoch ' + str(epoch) + ' test-accuracy: '
                         + str(accuracy))
     return
 
@@ -133,9 +122,11 @@ def main():
     parser.add_argument('--model_file', type=str, default='model/scae.model')
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=600)
-    parser.add_argument('--lr', type=float, default=1e-5)
-    parser.add_argument('--K', type=int, default=24)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--M', type=int, default=24, help='number of part capsules')
+    parser.add_argument('--K', type=int, default=24, help='number of object capsules')
     parser.add_argument('--C', type=int, default=10)
+    parser.add_argument('--eval_every', type=int, default=10)
     parser.add_argument('--load_ext', action = "store_true")
 
     args = parser.parse_args()
@@ -143,7 +134,8 @@ def main():
     root = './data'
     if not os.path.exists(root):
         os.mkdir(root)
-    trans = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), torchvision.transforms.Normalize((0.1307,), (0.3081,))])
+    # pixels must stay in [0, 1]: they are modelled as a mixture of templates with values in [0, 1]
+    trans = torchvision.transforms.ToTensor()
     train_set = torchvision.datasets.MNIST(root=root, train=True, transform=trans, download=True)
     test_set = torchvision.datasets.MNIST(root=root, train=False, transform=trans, download=True)    
 
@@ -162,9 +154,10 @@ def main():
     else:
         model_name = args.model_file
         print("loading existing model:->%s" % model_name)
-        scae = torch.load(model_name, map_location=lambda storage, loc: storage)
-        scae.to(device) 
-        accuracy = evaluate(scae,train=train_loader,test=test_loader,K=args.K,device=device)
+        scae = model.SCAE(num_parts=args.M,num_objects=args.K)
+        scae.load_state_dict(torch.load(model_name, map_location='cpu'))
+        scae.to(device)
+        accuracy = evaluate(scae,train=train_loader,test=test_loader,K=args.K,device=device,num_classes=args.C)
         print("accuracy: %0.4f"%accuracy)
 
 
